@@ -213,8 +213,4 @@ MIT License
 
 ## Version History
 
-- **v3.1.0** - Multi-book support with BOOK argument and `--book/-b` global option, new `setup` command for Claude Code MCP auto-configuration
-- **v3.0.0** - Complete rewrite with DI/SOA architecture, unified `mdbook` CLI, MCP server integration
-- **v2.1.0** - Added md-book-writer tool
-- **v2.0.0** - Generic multi-format support, YAML frontmatter parsing
-- **v1.0.0** - Initial release
+- **v1.0.0** - Initial public release with DI/SOA architecture, unified `mdbook` CLI, MCP server integration, multi-book support with BOOK argument and `--book/-b` global option, `setup` command for Claude Code MCP auto-configuration, multi-format support (mdBook, GitBook, Leanpub, Bookdown), and YAML frontmatter parsing
