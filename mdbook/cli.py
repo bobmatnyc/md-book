@@ -287,21 +287,29 @@ def new_chapter(
 
 @cli.command()
 @click.argument("book", type=click.Path(exists=True), default=None, required=False)
+@click.option(
+    "--preserve-structure/-P",
+    "--no-preserve-structure",
+    "preserve_structure",
+    default=True,
+    help="Preserve existing SUMMARY.md hierarchy (default). Use -P to regenerate flat.",
+)
 @click.pass_context
-def toc(ctx: click.Context, book: str | None) -> None:
+def toc(ctx: click.Context, book: str | None, preserve_structure: bool) -> None:
     """Regenerate table of contents.
 
     BOOK is the root directory of the book (default: current directory or global --book).
 
-    Scans the chapters directory and regenerates SUMMARY.md based on
-    the current chapter files.
+    By default, preserves existing SUMMARY.md hierarchy (Part headers, nesting)
+    and only adds new files. Use --no-preserve-structure/-P to regenerate flat.
     """
     book_service = get_book_service(ctx)
     book_path = resolve_book_path(ctx, book)
 
     try:
-        book_service.update_toc(book_path)
-        click.echo(f"Updated SUMMARY.md in {book_path}")
+        book_service.update_toc(book_path, preserve_structure)
+        mode = "preserved structure" if preserve_structure else "flat structure"
+        click.echo(f"Updated SUMMARY.md in {book_path} ({mode})")
     except FileNotFoundError as e:
         click.echo(f"Error: No book found - {e}", err=True)
         sys.exit(1)

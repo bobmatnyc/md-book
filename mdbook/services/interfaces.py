@@ -176,14 +176,17 @@ class IWriterService(Protocol):
         """
         ...
 
-    def update_toc(self, book: Book) -> None:
+    def update_toc(self, book: Book, preserve_structure: bool = True) -> None:
         """Update the book's table of contents.
 
-        Regenerates the table of contents file based on the
-        current chapter list in the book.
+        When preserve_structure=True (default), preserves existing hierarchy
+        in SUMMARY.md (Part headers, nesting levels) and only adds new files.
+        When preserve_structure=False, regenerates flat structure.
 
         Args:
             book: The Book whose TOC should be updated.
+            preserve_structure: If True, preserve existing SUMMARY.md hierarchy
+                and only add new files. If False, generate flat structure.
 
         Raises:
             PermissionError: If unable to write the TOC file.
@@ -283,13 +286,17 @@ class IBookService(Protocol):
         """
         ...
 
-    def update_toc(self, root: Path) -> None:
+    def update_toc(self, root: Path, preserve_structure: bool = True) -> None:
         """Update the book's table of contents.
 
-        Regenerates the TOC based on current chapters.
+        When preserve_structure=True (default), preserves existing hierarchy
+        in SUMMARY.md (Part headers, nesting levels) and only adds new files.
+        When preserve_structure=False, regenerates flat structure.
 
         Args:
             root: Root directory of the book project.
+            preserve_structure: If True, preserve existing SUMMARY.md hierarchy
+                and only add new files. If False, generate flat structure.
 
         Raises:
             FileNotFoundError: If no book exists at root.
