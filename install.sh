@@ -3,23 +3,16 @@
 
 echo "Installing The Augmented Programmer Book Reader..."
 
-# Check if Python 3 is available
-if ! command -v python3 &> /dev/null; then
-    echo "Error: Python 3 is required but not installed."
+# Check if uv is available
+if ! command -v uv &> /dev/null; then
+    echo "Error: uv is required but not installed."
+    echo "Install uv with: curl -LsSf https://astral.sh/uv/install.sh | sh"
     exit 1
 fi
 
-# Create virtual environment
-echo "Creating virtual environment..."
-python3 -m venv book_reader_env
-
-# Activate virtual environment
-echo "Activating virtual environment..."
-source book_reader_env/bin/activate
-
-# Install dependencies
-echo "Installing dependencies..."
-pip install -r requirements.txt
+# Create virtual environment and install dependencies using uv
+echo "Creating virtual environment and installing dependencies..."
+uv sync
 
 # Make the script executable
 chmod +x book_reader.py
@@ -32,9 +25,9 @@ cat > read_book.sh << 'EOF'
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
-# Activate virtual environment and run the reader
-source "$SCRIPT_DIR/book_reader_env/bin/activate"
-python "$SCRIPT_DIR/book_reader.py" "$@"
+# Run the reader using uv
+cd "$SCRIPT_DIR"
+uv run python book_reader.py "$@"
 EOF
 
 chmod +x read_book.sh
@@ -42,7 +35,7 @@ chmod +x read_book.sh
 echo "Installation complete!"
 echo ""
 echo "Usage options:"
-echo "  1. Direct execution: source book_reader_env/bin/activate && python book_reader.py"
+echo "  1. Direct execution: uv run python book_reader.py"
 echo "  2. Convenient launcher: ./read_book.sh"
 echo ""
 echo "Examples:"

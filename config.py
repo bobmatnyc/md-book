@@ -1,45 +1,72 @@
 """
-Configuration settings for The Augmented Programmer Book Reader
+Configuration settings for the Generic Markdown Book Reader
 """
 
 import os
 from pathlib import Path
+from typing import List, Set
+
 
 class BookReaderConfig:
     """Configuration class for book reader settings."""
-    
-    # Default book root directory
-    DEFAULT_BOOK_ROOT = Path.home() / "Projects" / "books" / "augmented-programmer"
-    
-    # Content prioritization
-    PRIORITY_DIRECTORIES = ['content', 'master-documents']
-    SKIP_DIRECTORIES = {'research', 'drafts', 'notes', 'project-management', 'background', 'tasks'}
-    
-    # File selection patterns (in priority order)
-    FILE_PRIORITY_PATTERNS = [
-        r'chapter.*complete\.md$',
-        r'chapter.*enhanced\.md$',
-        r'chapter.*revised\.md$',
-        r'chapter.*\.md$'
+
+    # Directories to skip during chapter discovery
+    SKIP_DIRECTORIES: Set[str] = {
+        'research', 'drafts', 'notes', 'project-management',
+        'background', 'tasks', 'archive', '.git', '__pycache__',
+        'node_modules', '.venv', 'venv', 'env'
+    }
+
+    # File patterns for standard chapter naming (regex patterns)
+    CHAPTER_FILE_PATTERNS: List[str] = [
+        r'^(\d+)[-_](.+)\.md$',           # 01-chapter-name.md, 01_chapter_name.md
+        r'^chapter[-_]?(\d+)[-_]?(.*)\.md$',  # chapter-01.md, chapter01.md, chapter-01-name.md
+        r'^ch(\d+)[-_]?(.*)\.md$',         # ch01.md, ch01-name.md
+        r'^part[-_]?(\d+)[-_]?(.*)\.md$',  # part-01.md, part1-intro.md
     ]
-    
+
+    # Files to treat as introduction/index (in priority order)
+    INTRO_FILES: List[str] = [
+        'README.md',
+        'readme.md',
+        'index.md',
+        'INDEX.md',
+        'introduction.md',
+        'INTRODUCTION.md',
+        '00-introduction.md',
+        '00-intro.md',
+    ]
+
+    # Files to skip (not part of book content)
+    SKIP_FILES: Set[str] = {
+        'CONTRIBUTING.md',
+        'CHANGELOG.md',
+        'LICENSE.md',
+        'CODE_OF_CONDUCT.md',
+    }
+
+    # Book structure detection files (in priority order)
+    STRUCTURE_FILES = {
+        'summary': 'SUMMARY.md',      # mdBook / GitBook
+        'leanpub': 'Book.txt',        # Leanpub
+        'bookdown': '_bookdown.yml',  # Bookdown
+        'mdbook': 'book.toml',        # mdBook config
+    }
+
     # Display settings
-    CONSOLE_WIDTH = 120
-    WRAP_TEXT = True
-    
-    # Chapter range
-    MIN_CHAPTER = 1
-    MAX_CHAPTER = 12
-    
+    CONSOLE_WIDTH: int = 120
+    WRAP_TEXT: bool = True
+
     # Navigation settings
     NAVIGATION_HELP = {
         'n': 'Next chapter',
         'p': 'Previous chapter',
         'toc': 'Table of contents',
         'j': 'Jump to chapter',
+        's': 'Search',
         'q': 'Quit'
     }
-    
+
     # Color scheme
     COLORS = {
         'header': 'bold blue',
@@ -50,9 +77,9 @@ class BookReaderConfig:
         'warning': 'yellow',
         'info': 'blue'
     }
-    
+
     # Markdown rendering settings
-    MARKDOWN_EXTENSIONS = [
+    MARKDOWN_EXTENSIONS: List[str] = [
         'codehilite',
         'fenced_code',
         'tables',
@@ -61,27 +88,27 @@ class BookReaderConfig:
         'attr_list',
         'def_list'
     ]
-    
+
     # Code highlighting theme
-    CODE_THEME = 'github-dark'
-    
+    CODE_THEME: str = 'github-dark'
+
     @classmethod
     def get_book_root(cls) -> Path:
-        """Get the book root directory, checking environment variables."""
+        """Get the book root directory from environment variable or current directory."""
         env_root = os.environ.get('BOOK_ROOT')
         if env_root:
             return Path(env_root)
-        return cls.DEFAULT_BOOK_ROOT
-    
+        return Path.cwd()
+
     @classmethod
     def validate_book_root(cls, book_root: Path) -> bool:
-        """Validate that the book root directory exists and contains expected structure."""
+        """Validate that the book root directory exists and contains markdown files."""
         if not book_root.exists():
             return False
-        
-        # Check for at least one chapter directory
-        chapter_dirs = list(book_root.glob('chapter-*'))
-        if not chapter_dirs:
+
+        if not book_root.is_dir():
             return False
-        
-        return True
+
+        # Check for any markdown files
+        md_files = list(book_root.glob('*.md')) + list(book_root.glob('**/*.md'))
+        return len(md_files) > 0

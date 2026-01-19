@@ -1,235 +1,213 @@
 #!/usr/bin/env python3
 """
-The Augmented Programmer Book Reader
-====================================
+Generic Markdown Book Reader
+============================
 
-A comprehensive Python markdown book reader that provides seamless navigation
-through "The Augmented Programmer" book chapters while filtering out non-book content.
-
-Author: Python Development Agent
-Version: 1.0.0
+A terminal-based markdown book reader supporting multiple formats:
+- mdBook / GitBook (SUMMARY.md)
+- Leanpub (Book.txt)
+- Bookdown (_bookdown.yml)
+- mdBook config (book.toml)
+- Auto-detection via filename patterns
 """
 
 import os
 import sys
 import click
-import markdown
+
+from version import __version__, get_version
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.text import Text
 from rich.prompt import Prompt
-from rich.columns import Columns
 from rich.table import Table
-import re
+
+from config import BookReaderConfig
+from structure_detector import StructureDetector, BookStructure, Chapter
 
 console = Console()
 
+
 class BookReader:
     """Main book reader class that handles navigation and display."""
-    
+
     def __init__(self, book_root: Path):
         """Initialize the book reader with the root directory."""
-        self.book_root = Path(book_root)
-        self.current_chapter = 1
-        self.chapters = self._discover_chapters()
-        self.total_chapters = len(self.chapters)
-        
-    def _discover_chapters(self) -> Dict[int, Dict[str, str]]:
-        """Discover all available chapters and their content files."""
-        chapters = {}
-        
-        # Priority order for content selection
-        priority_dirs = ['content', 'master-documents']
-        skip_dirs = {'research', 'drafts', 'notes', 'project-management', 'background', 'tasks'}
-        
-        # Find chapter directories (chapter-01 through chapter-12)
-        for i in range(1, 13):
-            chapter_num = i
-            chapter_dir = self.book_root / f"chapter-{i:02d}"
-            
-            if chapter_dir.exists():
-                chapter_info = self._find_chapter_content(chapter_dir, chapter_num)
-                if chapter_info:
-                    chapters[chapter_num] = chapter_info
-        
-        # Check master-documents for additional content
-        master_docs = self.book_root / "master-documents"
-        if master_docs.exists():
-            for master_file in master_docs.glob("*.md"):
-                if "complete" in master_file.stem.lower() or "master" in master_file.stem.lower():
-                    # Add as a special chapter 0 (overview)
-                    chapters[0] = {
-                        'title': 'Complete Manuscript',
-                        'file_path': str(master_file),
-                        'description': 'Full book overview and master document'
-                    }
-        
-        return chapters
-    
-    def _find_chapter_content(self, chapter_dir: Path, chapter_num: int) -> Optional[Dict[str, str]]:
-        """Find the best content file for a chapter."""
-        content_dir = chapter_dir / "content"
-        
-        if not content_dir.exists():
-            return None
-        
-        # Look for content files in priority order
-        content_files = list(content_dir.glob("*.md"))
-        
-        if not content_files:
-            return None
-        
-        # Prioritize files with specific patterns
-        priority_patterns = [
-            r'chapter.*complete\.md$',
-            r'chapter.*enhanced\.md$',
-            r'chapter.*revised\.md$',
-            r'chapter.*\.md$'
-        ]
-        
-        best_file = None
-        for pattern in priority_patterns:
-            for file in content_files:
-                if re.search(pattern, file.name, re.IGNORECASE):
-                    best_file = file
-                    break
-            if best_file:
-                break
-        
-        # If no priority match, use the first available file
-        if not best_file:
-            best_file = content_files[0]
-        
-        # Extract chapter title from the file
-        title = self._extract_chapter_title(best_file)
-        
-        return {
-            'title': title or f"Chapter {chapter_num}",
-            'file_path': str(best_file),
-            'description': f"Chapter {chapter_num} content"
+        self.book_root = Path(book_root).resolve()
+        self.config = BookReaderConfig()
+
+        # Detect book structure
+        detector = StructureDetector(self.book_root)
+        self.structure: BookStructure = detector.detect_structure()
+
+        # Build chapter index
+        self.chapters: Dict[int, Chapter] = {
+            ch.number: ch for ch in self.structure.chapters
         }
-    
-    def _extract_chapter_title(self, file_path: Path) -> Optional[str]:
-        """Extract the chapter title from the markdown file."""
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-                
-            # Look for first markdown heading
-            lines = content.split('\n')
-            for line in lines:
-                if line.strip().startswith('# '):
-                    return line.strip()[2:].strip()
-                    
-        except Exception:
-            pass
-        
-        return None
-    
+        self.total_chapters = len([c for c in self.chapters.values() if not c.is_intro])
+
+        # Set current chapter to first non-intro chapter, or intro if no chapters
+        non_intro = [c.number for c in self.chapters.values() if not c.is_intro]
+        self.current_chapter = min(non_intro) if non_intro else 0
+
+        # Book title
+        self.book_title = self._detect_book_title()
+
+    def _detect_book_title(self) -> str:
+        """Detect book title from structure or directory name."""
+        if self.structure.title:
+            return self.structure.title
+
+        # Try to get from intro chapter
+        if 0 in self.chapters:
+            intro = self.chapters[0]
+            if intro.title and intro.title.lower() not in ['introduction', 'readme', 'index']:
+                return intro.title
+
+        # Fall back to directory name
+        return self.book_root.name.replace('-', ' ').replace('_', ' ').title()
+
     def get_chapter_content(self, chapter_num: int) -> Optional[str]:
         """Get the content of a specific chapter."""
         if chapter_num not in self.chapters:
             return None
-        
-        file_path = self.chapters[chapter_num]['file_path']
-        
+
+        chapter = self.chapters[chapter_num]
+
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                return f.read()
+            content = chapter.file_path.read_text(encoding='utf-8')
+
+            # Strip YAML frontmatter from display
+            if content.startswith('---'):
+                import re
+                match = re.search(r'\n---\s*\n', content[3:])
+                if match:
+                    content = content[3 + match.end():]
+
+            return content
         except Exception as e:
             console.print(f"[red]Error reading chapter {chapter_num}: {e}[/red]")
             return None
-    
+
     def display_chapter(self, chapter_num: int):
         """Display a specific chapter with proper formatting."""
         if chapter_num not in self.chapters:
             console.print(f"[red]Chapter {chapter_num} not found[/red]")
             return
-        
+
         content = self.get_chapter_content(chapter_num)
         if not content:
             console.print(f"[red]Could not read Chapter {chapter_num}[/red]")
             return
-        
+
         # Clear screen
         console.clear()
-        
+
         # Display header
-        chapter_info = self.chapters[chapter_num]
-        header = f"Chapter {chapter_num}" if chapter_num > 0 else "Complete Manuscript"
-        
+        chapter = self.chapters[chapter_num]
+        if chapter.is_intro:
+            header = "Introduction"
+        else:
+            header = f"Chapter {chapter_num}"
+
+        # Show draft indicator if applicable
+        draft_indicator = " [yellow](DRAFT)[/yellow]" if chapter.is_draft else ""
+
+        subtitle_parts = []
+        if chapter.author:
+            subtitle_parts.append(f"Author: {chapter.author}")
+        if chapter.date:
+            subtitle_parts.append(f"Date: {chapter.date}")
+        subtitle = " | ".join(subtitle_parts) if subtitle_parts else None
+
         console.print(Panel(
-            f"[bold blue]{header}[/bold blue]\n[dim]{chapter_info['title']}[/dim]",
-            title="The Augmented Programmer",
-            subtitle=f"Page {chapter_num} of {self.total_chapters}",
+            f"[bold blue]{header}[/bold blue]{draft_indicator}\n[dim]{chapter.title}[/dim]"
+            + (f"\n[dim italic]{subtitle}[/dim italic]" if subtitle else ""),
+            title=self.book_title,
+            subtitle=f"Chapter {chapter_num} of {self.total_chapters}" if not chapter.is_intro else "Introduction",
             border_style="blue"
         ))
-        
+
         console.print()
-        
+
         # Display content with rich markdown rendering
         try:
-            md = Markdown(content, hyperlinks=True, code_theme="github-dark")
+            md = Markdown(content, hyperlinks=True, code_theme=self.config.CODE_THEME)
             console.print(md)
-        except Exception as e:
+        except Exception:
             # Fallback to plain text if markdown rendering fails
             console.print(content)
-        
+
         console.print()
-        
+
         # Display navigation help
         nav_help = "[dim]Navigation: [bold]n[/bold]=next, [bold]p[/bold]=previous, [bold]toc[/bold]=table of contents, [bold]j[/bold]=jump to chapter, [bold]q[/bold]=quit[/dim]"
         console.print(Panel(nav_help, border_style="dim"))
-    
+
     def display_table_of_contents(self):
         """Display the table of contents."""
         console.clear()
-        
+
         console.print(Panel(
             "[bold blue]Table of Contents[/bold blue]",
-            title="The Augmented Programmer",
+            title=self.book_title,
             border_style="blue"
         ))
-        
+
         console.print()
-        
+
+        # Show detected format
+        format_names = {
+            'summary': 'mdBook/GitBook (SUMMARY.md)',
+            'leanpub': 'Leanpub (Book.txt)',
+            'bookdown': 'Bookdown (_bookdown.yml)',
+            'mdbook': 'mdBook (book.toml)',
+            'auto': 'Auto-detected'
+        }
+        console.print(f"[dim]Format: {format_names.get(self.structure.format_type, 'Unknown')}[/dim]\n")
+
         table = Table(show_header=True, header_style="bold magenta")
-        table.add_column("Chapter", style="dim", width=8)
+        table.add_column("Ch", style="dim", width=4)
         table.add_column("Title", style="bold")
-        table.add_column("Status", style="green")
-        
+        table.add_column("Status", style="green", width=12)
+
         for chapter_num in sorted(self.chapters.keys()):
-            chapter_info = self.chapters[chapter_num]
-            status = "✓ Available" if Path(chapter_info['file_path']).exists() else "✗ Missing"
-            
-            display_num = str(chapter_num) if chapter_num > 0 else "Overview"
-            table.add_row(display_num, chapter_info['title'], status)
-        
+            chapter = self.chapters[chapter_num]
+
+            if chapter.is_draft:
+                status = "[yellow]Draft[/yellow]"
+            elif chapter.file_path.exists():
+                status = "[green]Available[/green]"
+            else:
+                status = "[red]Missing[/red]"
+
+            display_num = "Intro" if chapter.is_intro else str(chapter_num)
+            table.add_row(display_num, chapter.title, status)
+
         console.print(table)
         console.print()
-        
+
         nav_help = "[dim]Enter chapter number to jump to, or press Enter to return to current chapter[/dim]"
         console.print(Panel(nav_help, border_style="dim"))
-    
+
     def interactive_mode(self):
         """Start interactive reading mode."""
         console.print(Panel(
-            "[bold blue]Welcome to The Augmented Programmer Book Reader[/bold blue]\n\n"
-            "This reader provides seamless navigation through all 12 chapters\n"
-            "while filtering out research drafts and project management files.\n\n"
-            "[dim]Press any key to start reading...[/dim]",
-            title="Book Reader",
+            f"[bold blue]Welcome to {self.book_title}[/bold blue]\n\n"
+            f"Detected format: [cyan]{self.structure.format_type}[/cyan]\n"
+            f"Total chapters: [cyan]{self.total_chapters}[/cyan]\n\n"
+            "[dim]Press Enter to start reading...[/dim]",
+            title="Markdown Book Reader",
             border_style="blue"
         ))
-        
+
         input()  # Wait for user input
-        
+
         while True:
             self.display_chapter(self.current_chapter)
-            
+
             try:
                 choice = Prompt.ask(
                     f"\n[bold]Chapter {self.current_chapter}[/bold] - What would you like to do?",
@@ -237,7 +215,7 @@ class BookReader:
                     default="n",
                     show_choices=False
                 )
-                
+
                 if choice in ["n", "next"]:
                     self.next_chapter()
                 elif choice in ["p", "previous"]:
@@ -252,43 +230,50 @@ class BookReader:
                         except ValueError:
                             console.print("[red]Invalid chapter number[/red]")
                 elif choice in ["j", "jump"]:
-                    target = Prompt.ask("Enter chapter number (1-12 or 0 for overview)")
+                    max_ch = max(self.chapters.keys())
+                    target = Prompt.ask(f"Enter chapter number (0-{max_ch})")
                     try:
                         target_chapter = int(target)
                         self.jump_to_chapter(target_chapter)
                     except ValueError:
                         console.print("[red]Invalid chapter number[/red]")
                 elif choice in ["q", "quit"]:
-                    console.print("[blue]Thank you for reading The Augmented Programmer![/blue]")
+                    console.print(f"[blue]Thank you for reading {self.book_title}![/blue]")
                     break
-                    
+
             except KeyboardInterrupt:
-                console.print("\n[blue]Thank you for reading The Augmented Programmer![/blue]")
+                console.print(f"\n[blue]Thank you for reading {self.book_title}![/blue]")
                 break
             except EOFError:
-                console.print("\n[blue]Thank you for reading The Augmented Programmer![/blue]")
+                console.print(f"\n[blue]Thank you for reading {self.book_title}![/blue]")
                 break
-    
+
     def next_chapter(self):
         """Navigate to the next chapter."""
-        available_chapters = sorted([c for c in self.chapters.keys() if c > 0])
-        current_index = available_chapters.index(self.current_chapter) if self.current_chapter in available_chapters else 0
-        
+        available_chapters = sorted(self.chapters.keys())
+        try:
+            current_index = available_chapters.index(self.current_chapter)
+        except ValueError:
+            current_index = 0
+
         if current_index < len(available_chapters) - 1:
             self.current_chapter = available_chapters[current_index + 1]
         else:
             console.print("[yellow]You're at the last chapter[/yellow]")
-    
+
     def previous_chapter(self):
         """Navigate to the previous chapter."""
-        available_chapters = sorted([c for c in self.chapters.keys() if c > 0])
-        current_index = available_chapters.index(self.current_chapter) if self.current_chapter in available_chapters else 0
-        
+        available_chapters = sorted(self.chapters.keys())
+        try:
+            current_index = available_chapters.index(self.current_chapter)
+        except ValueError:
+            current_index = 0
+
         if current_index > 0:
             self.current_chapter = available_chapters[current_index - 1]
         else:
             console.print("[yellow]You're at the first chapter[/yellow]")
-    
+
     def jump_to_chapter(self, chapter_num: int):
         """Jump to a specific chapter."""
         if chapter_num in self.chapters:
@@ -301,42 +286,91 @@ class BookReader:
 @click.option('--chapter', '-c', type=int, help='Jump to specific chapter')
 @click.option('--toc', is_flag=True, help='Show table of contents')
 @click.option('--root', '-r', default=None,
-              help='Root directory of the book (defaults to parent of script directory)')
-def main(chapter: Optional[int], toc: bool, root: Optional[str]):
+              help='Root directory of the book (defaults to current directory)')
+@click.option('--info', is_flag=True, help='Show detected book structure info and exit')
+@click.version_option(version=get_version(), prog_name='md-book-reader')
+def main(chapter: Optional[int], toc: bool, root: Optional[str], info: bool):
     """
-    The Augmented Programmer Book Reader
+    Generic Markdown Book Reader
 
-    A comprehensive Python markdown book reader that provides seamless navigation
-    through "The Augmented Programmer" book chapters.
+    A terminal-based markdown book reader supporting mdBook, GitBook,
+    Leanpub, Bookdown, and auto-detected formats.
+
+    Examples:
+
+        # Read book in current directory
+        python book_reader.py
+
+        # Read book from specific directory
+        python book_reader.py --root /path/to/book
+
+        # Jump to chapter 5
+        python book_reader.py --chapter 5
+
+        # Show table of contents
+        python book_reader.py --toc
+
+        # Show detected structure info
+        python book_reader.py --info
     """
 
-    # Use relative path from script location if no root specified
+    # Determine book root
     if root is None:
-        script_dir = Path(__file__).resolve().parent
-        book_root = script_dir.parent  # book-reader is inside the book directory
+        # Try current directory first
+        book_root = Path.cwd()
+
+        # If we're in the book-reader directory, try parent
+        if book_root.name == 'book-reader':
+            parent = book_root.parent
+            if BookReaderConfig.validate_book_root(parent):
+                book_root = parent
     else:
         book_root = Path(root)
-    
+
     if not book_root.exists():
         console.print(f"[red]Book root directory not found: {book_root}[/red]")
         console.print("Please specify the correct path using --root option")
         sys.exit(1)
-    
+
+    if not BookReaderConfig.validate_book_root(book_root):
+        console.print(f"[red]No markdown files found in: {book_root}[/red]")
+        console.print("Please specify a directory containing markdown files using --root option")
+        sys.exit(1)
+
     reader = BookReader(book_root)
-    
+
     if not reader.chapters:
         console.print("[red]No chapters found in the specified directory[/red]")
         sys.exit(1)
-    
+
+    if info:
+        # Display structure info and exit
+        console.print(Panel(
+            f"[bold]Book:[/bold] {reader.book_title}\n"
+            f"[bold]Root:[/bold] {reader.book_root}\n"
+            f"[bold]Format:[/bold] {reader.structure.format_type}\n"
+            f"[bold]Chapters:[/bold] {reader.total_chapters}",
+            title="Book Structure Info",
+            border_style="blue"
+        ))
+
+        console.print("\n[bold]Chapters found:[/bold]")
+        for ch_num in sorted(reader.chapters.keys()):
+            ch = reader.chapters[ch_num]
+            prefix = "Intro" if ch.is_intro else f"Ch {ch_num}"
+            draft = " (draft)" if ch.is_draft else ""
+            console.print(f"  [{prefix}] {ch.title}{draft}")
+            console.print(f"       [dim]{ch.file_path}[/dim]")
+        return
+
     if toc:
         reader.display_table_of_contents()
         return
-    
-    if chapter:
+
+    if chapter is not None:
         reader.jump_to_chapter(chapter)
-        reader.interactive_mode()
-    else:
-        reader.interactive_mode()
+
+    reader.interactive_mode()
 
 
 if __name__ == "__main__":
