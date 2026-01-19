@@ -119,17 +119,21 @@ class BookService:
         book = self._reader.load_book(root)
         return self._writer.add_chapter(book, title, draft)
 
-    def update_toc(self, root: Path) -> None:
+    def update_toc(self, root: Path, preserve_structure: bool = True) -> None:
         """Update the book's table of contents.
 
-        Regenerates the TOC based on current chapters.
+        When preserve_structure=True (default), preserves existing hierarchy
+        in SUMMARY.md (Part headers, nesting levels) and only adds new files.
+        When preserve_structure=False, regenerates flat structure.
 
         Args:
             root: Root directory of the book project.
+            preserve_structure: If True, preserve existing SUMMARY.md hierarchy
+                and only add new files. If False, generate flat structure.
 
         Raises:
             FileNotFoundError: If no book exists at root.
             PermissionError: If unable to write the TOC.
         """
         book = self._reader.load_book(root)
-        self._writer.update_toc(book)
+        self._writer.update_toc(book, preserve_structure)

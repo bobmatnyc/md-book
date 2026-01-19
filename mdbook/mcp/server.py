@@ -15,7 +15,6 @@ from mcp.types import Tool, TextContent
 from ..infrastructure import configure_services
 from ..services import IBookService
 
-
 # Initialize MCP server
 server = Server("mdbook")
 
@@ -137,13 +136,18 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="update_toc",
-            description="Regenerate the table of contents (SUMMARY.md) based on current chapters.",
+            description="Update the table of contents (SUMMARY.md). By default preserves existing hierarchy.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
                         "description": "Path to the book directory",
+                    },
+                    "preserve_structure": {
+                        "type": "boolean",
+                        "description": "Preserve existing SUMMARY.md hierarchy and only add new files (default: true). Set to false to regenerate flat structure.",
+                        "default": True,
                     },
                 },
                 "required": ["path"],
@@ -197,6 +201,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     # Format result as JSON-like string for readability
     import json
+
     text = json.dumps(result, indent=2, default=str)
 
     return [TextContent(type="text", text=text)]
@@ -365,14 +370,15 @@ async def handle_update_toc(
 
     Args:
         book_service: The book service instance.
-        arguments: Tool arguments containing 'path'.
+        arguments: Tool arguments containing 'path' and optional 'preserve_structure'.
 
     Returns:
         Dictionary with update status.
     """
     path = Path(arguments["path"]).resolve()
+    preserve_structure = arguments.get("preserve_structure", True)
 
-    book_service.update_toc(path)
+    book_service.update_toc(path, preserve_structure)
 
     # Get updated book info to confirm
     book = book_service.get_book_info(path)
@@ -382,6 +388,7 @@ async def handle_update_toc(
         "message": "Table of contents updated",
         "path": str(path),
         "chapter_count": len(book.chapters),
+        "preserve_structure": preserve_structure,
     }
 
 
