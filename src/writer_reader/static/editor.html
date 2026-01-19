@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Augmented Programmer - Segment Editor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        .prose { max-width: none; }
+        .prose h1 { font-size: 1.5rem; font-weight: bold; margin-top: 1.5rem; margin-bottom: 0.5rem; color: #60a5fa; }
+        .prose h2 { font-size: 1.25rem; font-weight: bold; margin-top: 1.25rem; margin-bottom: 0.5rem; color: #93c5fd; }
+        .prose h3 { font-size: 1.1rem; font-weight: 600; margin-top: 1rem; margin-bottom: 0.5rem; color: #bfdbfe; }
+        .prose p { margin-bottom: 0.75rem; line-height: 1.7; }
+        .prose ul, .prose ol { margin-left: 1.5rem; margin-bottom: 0.75rem; }
+        .prose li { margin-bottom: 0.25rem; }
+        .prose hr { border-color: #374151; margin: 1.5rem 0; }
+        .prose code { background: #1f2937; padding: 0.125rem 0.25rem; border-radius: 0.25rem; font-size: 0.875rem; }
+        .prose blockquote { border-left: 3px solid #4b5563; padding-left: 1rem; margin: 1rem 0; font-style: italic; color: #9ca3af; }
+        .segment-editor { font-family: 'Monaco', 'Menlo', monospace; font-size: 14px; line-height: 1.6; }
+        .diff-add { background: rgba(34, 197, 94, 0.2); }
+        .diff-remove { background: rgba(239, 68, 68, 0.2); }
+        .diff-header { color: #60a5fa; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback } = React;
+        const API_BASE = 'http://localhost:5555/api';
+
+        // API helpers
+        const api = {
+            async get(path) {
+                const res = await fetch(`${API_BASE}${path}`);
+                return res.json();
+            },
+            async put(path, data) {
+                const res = await fetch(`${API_BASE}${path}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                return res.json();
+            },
+            async post(path, data) {
+                const res = await fetch(`${API_BASE}${path}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                return res.json();
+            }
+        };
+
+        function DiffViewer({ diff }) {
+            if (!diff) return null;
+
+            const lines = diff.split('\n').map((line, i) => {
+                let className = '';
+                if (line.startsWith('+') && !line.startsWith('+++')) className = 'diff-add';
+                else if (line.startsWith('-') && !line.startsWith('---')) className = 'diff-remove';
+                else if (line.startsWith('@@') || line.startsWith('diff ')) className = 'diff-header';
+
+                return (
+                    <div key={i} className={`${className} px-2`}>
+                        <code className="text-xs">{line}</code>
+                    </div>
+                );
+            });
+
+            return (
+                <div className="bg-gray-950 rounded p-4 overflow-x-auto max-h-96 overflow-y-auto font-mono">
+                    {lines}
+                </div>
+            );
+        }
+
+        function GitPanel({ onRefresh }) {
+            const [status, setStatus] = useState(null);
+            const [diff, setDiff] = useState('');
+            const [log, setLog] = useState([]);
+            const [message, setMessage] = useState('');
+            const [loading, setLoading] = useState(false);
+            const [error, setError] = useState('');
+
+            const refresh = useCallback(async () => {
+                try {
+                    const [statusData, diffData, logData] = await Promise.all([
+                        api.get('/git/status'),
+                        api.get('/git/diff'),
+                        api.get('/git/log?limit=5')
+                    ]);
+                    setStatus(statusData);
+                    setDiff(diffData.diff || '');
+                    setLog(logData.commits || []);
+                    setError('');
+                } catch (e) {
+                    setError('Failed to connect to server. Is it running on port 5555?');
+                }
+            }, []);
+
+            useEffect(() => { refresh(); }, [refresh]);
+
+            const handleStage = async () => {
+                setLoading(true);
+                await api.post('/git/add', { paths: [] });
+                refresh();
+                setLoading(false);
+            };
+
+            const handleCommit = async () => {
+                if (!message.trim()) {
+                    setError('Please enter a commit message');
+                    return;
+                }
+                setLoading(true);
+                const result = await api.post('/git/commit', { message });
+                if (result.error) {
+                    setError(result.error);
+                } else {
+                    setMessage('');
+                    refresh();
+                    if (onRefresh) onRefresh();
+                }
+                setLoading(false);
+            };
+
+            const handlePush = async () => {
+                setLoading(true);
+                const result = await api.post('/git/push', {});
+                if (result.error) {
+                    setError(result.error);
+                } else {
+                    refresh();
+                }
+                setLoading(false);
+            };
+
+            if (error && error.includes('connect')) {
+                return (
+                    <div className="bg-red-900/30 border border-red-600 rounded-lg p-4">
+                        <h3 className="font-semibold text-red-400 mb-2">⚠️ Server Not Running</h3>
+                        <p className="text-sm text-gray-300 mb-2">{error}</p>
+                        <code className="text-xs bg-gray-800 p-2 rounded block">
+                            cd /Users/masa/Writing/Books/book_augmented-programmer<br/>
+                            pip install flask flask-cors pyyaml<br/>
+                            python server/app.py
+                        </code>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="bg-gray-800 rounded-lg p-4 space-y-4">
+                    <div className="flex items-center justify-between">
+                        <h3 className="font-semibold text-blue-400">🔀 Git Status</h3>
+                        <button onClick={refresh} className="text-xs px-2 py-1 bg-gray-700 rounded hover:bg-gray-600">
+                            Refresh
+                        </button>
+                    </div>
+
+                    {error && !error.includes('connect') && (
+                        <div className="text-red-400 text-sm">{error}</div>
+                    )}
+
+                    {status && (
+                        <div>
+                            {status.clean ? (
+                                <p className="text-green-400 text-sm">✓ Working tree clean</p>
+                            ) : (
+                                <div className="space-y-2">
+                                    <p className="text-yellow-400 text-sm">{status.files?.length || 0} modified files</p>
+                                    <ul className="text-xs text-gray-400 max-h-32 overflow-y-auto">
+                                        {status.files?.map((f, i) => (
+                                            <li key={i} className="flex gap-2">
+                                                <span className={f.status.includes('M') ? 'text-yellow-400' : f.status.includes('A') ? 'text-green-400' : 'text-red-400'}>
+                                                    {f.status}
+                                                </span>
+                                                <span>{f.path}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {diff && (
+                        <div>
+                            <h4 className="text-sm font-semibold text-gray-400 mb-2">Diff Preview</h4>
+                            <DiffViewer diff={diff} />
+                        </div>
+                    )}
+
+                    <div className="flex gap-2 flex-wrap">
+                        <button
+                            onClick={handleStage}
+                            disabled={loading || status?.clean}
+                            className="px-3 py-1.5 text-sm bg-blue-600 rounded hover:bg-blue-500 disabled:opacity-50"
+                        >
+                            Stage All
+                        </button>
+                        <input
+                            type="text"
+                            value={message}
+                            onChange={(e) => setMessage(e.target.value)}
+                            placeholder="Commit message..."
+                            className="flex-1 px-3 py-1.5 text-sm bg-gray-700 rounded border border-gray-600 focus:border-blue-500 outline-none"
+                        />
+                        <button
+                            onClick={handleCommit}
+                            disabled={loading || !message.trim()}
+                            className="px-3 py-1.5 text-sm bg-green-600 rounded hover:bg-green-500 disabled:opacity-50"
+                        >
+                            Commit
+                        </button>
+                        <button
+                            onClick={handlePush}
+                            disabled={loading}
+                            className="px-3 py-1.5 text-sm bg-purple-600 rounded hover:bg-purple-500 disabled:opacity-50"
+                        >
+                            Push
+                        </button>
+                    </div>
+
+                    {log.length > 0 && (
+                        <div>
+                            <h4 className="text-sm font-semibold text-gray-400 mb-2">Recent Commits</h4>
+                            <ul className="text-xs space-y-1">
+                                {log.map((c, i) => (
+                                    <li key={i} className="flex gap-2">
+                                        <span className="text-blue-400 font-mono">{c.hash}</span>
+                                        <span className="text-gray-300 truncate">{c.message}</span>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        function SegmentEditor({ segment, chapterDir, onSave, onCancel }) {
+            const [content, setContent] = useState('');
+            const [original, setOriginal] = useState('');
+            const [loading, setLoading] = useState(true);
+            const [saving, setSaving] = useState(false);
+            const [preview, setPreview] = useState(false);
+
+            useEffect(() => {
+                const load = async () => {
+                    setLoading(true);
+                    const path = `${chapterDir}/${segment.file}`;
+                    const data = await api.get(`/segment/${path}`);
+                    setContent(data.content || '');
+                    setOriginal(data.content || '');
+                    setLoading(false);
+                };
+                load();
+            }, [segment, chapterDir]);
+
+            const handleSave = async () => {
+                setSaving(true);
+                const path = `${chapterDir}/${segment.file}`;
+                await api.put(`/segment/${path}`, { content });
+                setOriginal(content);
+                setSaving(false);
+                if (onSave) onSave();
+            };
+
+            const hasChanges = content !== original;
+
+            if (loading) return <div className="p-4 text-gray-400">Loading...</div>;
+
+            return (
+                <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <span className="text-sm text-gray-400">{segment.file}</span>
+                            {hasChanges && <span className="text-xs text-yellow-400">● Modified</span>}
+                        </div>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => setPreview(!preview)}
+                                className={`px-2 py-1 text-xs rounded ${preview ? 'bg-purple-600' : 'bg-gray-700'}`}
+                            >
+                                {preview ? 'Edit' : 'Preview'}
+                            </button>
+                            <button
+                                onClick={handleSave}
+                                disabled={!hasChanges || saving}
+                                className="px-2 py-1 text-xs bg-green-600 rounded hover:bg-green-500 disabled:opacity-50"
+                            >
+                                {saving ? 'Saving...' : 'Save'}
+                            </button>
+                            <button
+                                onClick={onCancel}
+                                className="px-2 py-1 text-xs bg-gray-700 rounded hover:bg-gray-600"
+                            >
+                                Close
+                            </button>
+                        </div>
+                    </div>
+
+                    {preview ? (
+                        <div
+                            className="prose text-gray-300 bg-gray-900 rounded p-4 max-h-96 overflow-y-auto"
+                            dangerouslySetInnerHTML={{ __html: window.marked?.parse(content) || content }}
+                        />
+                    ) : (
+                        <textarea
+                            value={content}
+                            onChange={(e) => setContent(e.target.value)}
+                            className="segment-editor w-full h-96 bg-gray-900 text-gray-100 p-4 rounded border border-gray-700 focus:border-blue-500 outline-none resize-y"
+                            spellCheck="false"
+                        />
+                    )}
+                </div>
+            );
+        }
+
+        function Segment({ segment, chapterDir, isEditing, onEdit, onSave }) {
+            const [content, setContent] = useState(null);
+            const [expanded, setExpanded] = useState(false);
+
+            const loadContent = async () => {
+                if (content !== null) return;
+                const path = `${chapterDir}/${segment.file}`;
+                const data = await api.get(`/segment/${path}`);
+                setContent(data.content || '');
+            };
+
+            const handleExpand = () => {
+                if (!expanded) loadContent();
+                setExpanded(!expanded);
+            };
+
+            // Determine segment type badge
+            const typeBadge = {
+                'chapter-title': { bg: 'bg-blue-600', text: 'Title' },
+                'section': { bg: 'bg-purple-600', text: 'Section' },
+                'prose': { bg: 'bg-gray-600', text: 'Prose' }
+            }[segment.type] || { bg: 'bg-gray-600', text: segment.type };
+
+            return (
+                <div className="border border-gray-700 rounded-lg overflow-hidden">
+                    <div
+                        className="flex items-center justify-between p-3 bg-gray-800 cursor-pointer hover:bg-gray-750"
+                        onClick={handleExpand}
+                    >
+                        <div className="flex items-center gap-3">
+                            <span className="text-gray-500 font-mono text-sm">{segment.index.toString().padStart(2, '0')}</span>
+                            <span className={`px-2 py-0.5 rounded text-xs ${typeBadge.bg}`}>{typeBadge.text}</span>
+                            <span className="text-gray-200 truncate max-w-md">{segment.title}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={(e) => { e.stopPropagation(); onEdit(segment); }}
+                                className="px-2 py-1 text-xs bg-blue-600 rounded hover:bg-blue-500"
+                            >
+                                ✏️ Edit
+                            </button>
+                            <span className="text-gray-500">{expanded ? '▼' : '▶'}</span>
+                        </div>
+                    </div>
+
+                    {expanded && (
+                        <div className="p-4 bg-gray-900 border-t border-gray-700">
+                            {isEditing ? (
+                                <SegmentEditor
+                                    segment={segment}
+                                    chapterDir={chapterDir}
+                                    onSave={() => { onSave(); setContent(null); }}
+                                    onCancel={() => onEdit(null)}
+                                />
+                            ) : content !== null ? (
+                                <div
+                                    className="prose text-gray-300 max-h-64 overflow-y-auto"
+                                    dangerouslySetInnerHTML={{ __html: window.marked?.parse(content) || content }}
+                                />
+                            ) : (
+                                <p className="text-gray-400">Loading...</p>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        function Chapter({ chapter, onRefreshGit }) {
+            const [expanded, setExpanded] = useState(false);
+            const [editingSegment, setEditingSegment] = useState(null);
+
+            return (
+                <div className="bg-gray-800 rounded-lg overflow-hidden">
+                    <div
+                        className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-750"
+                        onClick={() => setExpanded(!expanded)}
+                    >
+                        <div className="flex items-center gap-4">
+                            <span className="text-blue-400 font-bold">Ch {chapter.chapter}</span>
+                            <span className="font-semibold">{chapter.title}</span>
+                            <span className="text-gray-500 text-sm">({chapter.segments?.length || 0} segments)</span>
+                        </div>
+                        <span className="text-gray-500 text-xl">{expanded ? '▼' : '▶'}</span>
+                    </div>
+
+                    {expanded && (
+                        <div className="p-4 pt-0 space-y-2">
+                            {chapter.segments?.map((seg, i) => (
+                                <Segment
+                                    key={seg.file}
+                                    segment={seg}
+                                    chapterDir={chapter.dir}
+                                    isEditing={editingSegment?.file === seg.file}
+                                    onEdit={setEditingSegment}
+                                    onSave={onRefreshGit}
+                                />
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        function App() {
+            const [index, setIndex] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState('');
+            const [gitKey, setGitKey] = useState(0);
+
+            useEffect(() => {
+                const load = async () => {
+                    try {
+                        const data = await api.get('/index');
+                        setIndex(data);
+                        setError('');
+                    } catch (e) {
+                        setError('Failed to load index. Is the server running?');
+                    }
+                    setLoading(false);
+                };
+                load();
+            }, []);
+
+            const refreshGit = () => setGitKey(k => k + 1);
+
+            const stats = index?.chapters?.reduce((acc, ch) => {
+                acc.chapters++;
+                acc.segments += ch.segments?.length || 0;
+                return acc;
+            }, { chapters: 0, segments: 0 }) || { chapters: 0, segments: 0 };
+
+            return (
+                <div className="max-w-6xl mx-auto p-8">
+                    <header className="mb-8 text-center">
+                        <h1 className="text-3xl font-bold mb-2">The Augmented Programmer</h1>
+                        <p className="text-gray-400">Segment Editor</p>
+                    </header>
+
+                    <div className="grid grid-cols-3 gap-8">
+                        {/* Main content - 2 columns */}
+                        <div className="col-span-2 space-y-4">
+                            <div className="flex items-center justify-between mb-4">
+                                <div className="text-sm text-gray-400">
+                                    {stats.chapters} chapters • {stats.segments} segments
+                                </div>
+                            </div>
+
+                            {loading && <p className="text-gray-400">Loading...</p>}
+                            {error && (
+                                <div className="bg-red-900/30 border border-red-600 rounded-lg p-4">
+                                    <p className="text-red-400">{error}</p>
+                                    <code className="text-xs bg-gray-800 p-2 rounded block mt-2">
+                                        python server/app.py
+                                    </code>
+                                </div>
+                            )}
+
+                            {index?.chapters?.map((chapter) => (
+                                <Chapter
+                                    key={chapter.chapter}
+                                    chapter={chapter}
+                                    onRefreshGit={refreshGit}
+                                />
+                            ))}
+                        </div>
+
+                        {/* Git panel - 1 column */}
+                        <div className="col-span-1">
+                            <div className="sticky top-8">
+                                <GitPanel key={gitKey} onRefresh={refreshGit} />
+
+                                <div className="mt-4 bg-gray-800 rounded-lg p-4">
+                                    <h3 className="font-semibold text-gray-400 mb-2">📁 File Convention</h3>
+                                    <code className="text-xs text-gray-500 block">
+                                        segments/<br/>
+                                        ├── ch01-title/<br/>
+                                        │   ├── _meta.yaml<br/>
+                                        │   ├── 01-opening.md<br/>
+                                        │   ├── 02-section.md<br/>
+                                        │   └── ...<br/>
+                                    </code>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <footer className="mt-12 text-center text-gray-500 text-sm">
+                        <p>Edit segments individually • Changes tracked via git</p>
+                        <p className="mt-1">Remote: github.com/bobmatnyc/writing</p>
+                    </footer>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
