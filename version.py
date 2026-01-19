@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Tuple
 
 # Semantic version components
-VERSION: Tuple[int, int, int] = (1, 0, 0)
+VERSION: Tuple[int, int, int] = (1, 0, 1)
 
 # Build number - can be set manually or computed from git
 _BUILD_NUMBER: int = 0
@@ -34,11 +34,16 @@ def _get_git_commit_count() -> int:
             cwd=module_dir,
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
         )
         if result.returncode == 0:
             return int(result.stdout.strip())
-    except (subprocess.TimeoutExpired, subprocess.SubprocessError, ValueError, FileNotFoundError):
+    except (
+        subprocess.TimeoutExpired,
+        subprocess.SubprocessError,
+        ValueError,
+        FileNotFoundError,
+    ):
         pass
     return 0
 
